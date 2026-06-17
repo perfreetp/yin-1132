@@ -80,11 +80,11 @@ export interface ContactRecord {
 }
 
 export interface PsqiScores {
-  sleepQuality: number;
-  sleepLatency: number;
-  sleepDuration: number;
-  sleepEfficiency: number;
-  sleepDisturbance: number;
-  hypnoticDrug: number;
-  daytimeDysfunction: number;
+  sleepQuality: number | null;
+  sleepLatency: number | null;
+  sleepDuration: number | null;
+  sleepEfficiency: number | null;
+  sleepDisturbance: number | null;
+  hypnoticDrug: number | null;
+  daytimeDysfunction: number | null;
 }

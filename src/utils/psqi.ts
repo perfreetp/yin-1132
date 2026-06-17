@@ -1,7 +1,21 @@
 import type { PsqiScores, RiskLevel } from '../types';
 
 export const calculatePsqiTotal = (scores: PsqiScores): number => {
-  return Object.values(scores).reduce((sum, score) => sum + score, 0);
+  return Object.values(scores).reduce((sum, score) => sum + (score ?? 0), 0);
+};
+
+export const isPsqiComplete = (scores: PsqiScores): boolean => {
+  return Object.values(scores).every((score) => score !== null);
+};
+
+export const getIncompleteItems = (scores: PsqiScores): string[] => {
+  const incomplete: string[] = [];
+  psqiQuestions.forEach((q) => {
+    if (scores[q.key as keyof PsqiScores] === null) {
+      incomplete.push(q.label);
+    }
+  });
+  return incomplete;
 };
 
 export const getRiskLevel = (totalScore: number): RiskLevel => {

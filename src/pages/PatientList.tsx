@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Plus, Filter, ClipboardList, Phone, FileText, ChevronDown } from 'lucide-react';
+import { Search, Plus, Filter, ClipboardList, Phone, FileText, ChevronDown, ChevronUp } from 'lucide-react';
 import { useAppStore } from '../store';
 import { RiskBadge } from '../components/RiskBadge';
 import { ScoreDisplay } from '../components/ScoreDisplay';
@@ -17,13 +17,24 @@ export const PatientList = () => {
     setFilterRisk,
     setFilterStatus,
     getFilteredPatients,
-    getPatientById
+    getPatientById,
+    getTasksByPatientId
   } = useAppStore();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [showRiskFilter, setShowRiskFilter] = useState(false);
   const [showStatusFilter, setShowStatusFilter] = useState(false);
   const [selectedPatient, setSelectedPatient] = useState<string | null>(null);
+
+  const handlePhoneFollowup = (patientId: string) => {
+    const tasks = getTasksByPatientId(patientId);
+    const pendingTask = tasks.find(t => t.status === 'pending');
+    if (pendingTask) {
+      navigate(`/followup?taskId=${pendingTask.id}&patientId=${patientId}`);
+    } else {
+      navigate(`/followup?patientId=${patientId}`);
+    }
+  };
 
   const patients = getFilteredPatients();
 
@@ -244,16 +255,26 @@ export const PatientList = () => {
                         <ClipboardList className="w-4 h-4" />
                       </button>
                       <button
+                        onClick={() => handlePhoneFollowup(patient.id)}
                         className="p-2 text-green-500 hover:bg-green-50 rounded-lg transition-colors"
                         title="电话随访"
                       >
                         <Phone className="w-4 h-4" />
                       </button>
                       <button
-                        className="p-2 text-purple-500 hover:bg-purple-50 rounded-lg transition-colors"
+                        onClick={() => setSelectedPatient(selectedPatient === patient.id ? null : patient.id)}
+                        className={`p-2 rounded-lg transition-colors ${
+                          selectedPatient === patient.id
+                            ? 'text-white bg-purple-500'
+                            : 'text-purple-500 hover:bg-purple-50'
+                        }`}
                         title="查看详情"
                       >
-                        <FileText className="w-4 h-4" />
+                        {selectedPatient === patient.id ? (
+                          <ChevronUp className="w-4 h-4" />
+                        ) : (
+                          <FileText className="w-4 h-4" />
+                        )}
                       </button>
                     </div>
                   </td>

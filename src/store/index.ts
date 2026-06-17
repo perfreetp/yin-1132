@@ -1,10 +1,11 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { Patient, PsqiAssessment, FollowupTask, Intervention, ContactRecord, PsqiScores } from '../types';
 import { mockPatients } from '../data/patients';
 import { mockAssessments } from '../data/assessments';
 import { mockTasks } from '../data/tasks';
 import { mockInterventions, mockContactRecords } from '../data/interventions';
-import { calculatePsqiTotal, getRiskLevel, getFollowupInterval } from '../utils/psqi';
+import { calculatePsqiTotal, getRiskLevel, getFollowupInterval, isPsqiComplete } from '../utils/psqi';
 import { addDaysToDate, getTodayString } from '../utils/date';
 
 interface AppState {
@@ -30,7 +31,7 @@ interface AppActions {
     aggravatingFactors: string;
     relievingFactors: string;
     doctorConclusion: string;
-  }) => void;
+  }) => { success: boolean; message?: string };
   updateTaskStatus: (taskId: string, status: FollowupTask['status'], notes?: string) => void;
   addContactRecord: (record: Omit<ContactRecord, 'id'>) => void;
   addIntervention: (intervention: Omit<Intervention, 'id'>) => void;
@@ -73,141 +74,170 @@ const createFollowupTask = (patientId: string, patientName: string, riskLevel: s
   };
 };
 
-export const useAppStore = create<AppState & AppActions>((set, get) => ({
-  patients: mockPatients,
-  assessments: mockAssessments,
-  tasks: mockTasks,
-  interventions: mockInterventions,
-  contactRecords: mockContactRecords,
-  currentUser: { name: '张医生', role: '医生' },
-  searchQuery: '',
-  filterRisk: 'all',
-  filterStatus: 'all',
+export const useAppStore = create<AppState & AppActions>()(
+  persist(
+    (set, get) => ({
+      patients: mockPatients,
+      assessments: mockAssessments,
+      tasks: mockTasks,
+      interventions: mockInterventions,
+      contactRecords: mockContactRecords,
+      currentUser: { name: '张医生', role: '医生' },
+      searchQuery: '',
+      filterRisk: 'all',
+      filterStatus: 'all',
 
-  setSearchQuery: (query) => set({ searchQuery: query }),
-  setFilterRisk: (risk) => set({ filterRisk: risk }),
-  setFilterStatus: (status) => set({ filterStatus: status }),
+      setSearchQuery: (query) => set({ searchQuery: query }),
+      setFilterRisk: (risk) => set({ filterRisk: risk }),
+      setFilterStatus: (status) => set({ filterStatus: status }),
 
-  addPatient: (patientData) => {
-    const newPatient: Patient = {
-      ...patientData,
-      id: generateId('P'),
-      createDate: getTodayString(),
-      riskLevel: 'low',
-      latestPsqiScore: 0,
-      status: 'active'
-    };
-    set((state) => ({
-      patients: [...state.patients, newPatient]
-    }));
-  },
+      addPatient: (patientData) => {
+        const newPatient: Patient = {
+          ...patientData,
+          id: generateId('P'),
+          createDate: getTodayString(),
+          riskLevel: 'low',
+          latestPsqiScore: 0,
+          status: 'active'
+        };
+        set((state) => ({
+          patients: [...state.patients, newPatient]
+        }));
+      },
 
-  addAssessment: (patientId, scores, formData) => {
-    const totalScore = calculatePsqiTotal(scores);
-    const riskLevel = getRiskLevel(totalScore);
-    const today = getTodayString();
+      addAssessment: (patientId, scores, formData) => {
+        if (!isPsqiComplete(scores)) {
+          return { success: false, message: '请完成所有7个PSQI分项评分后再保存' };
+        }
+        if (!formData.chiefComplaint.trim()) {
+          return { success: false, message: '请填写失眠主诉' };
+        }
 
-    const newAssessment: PsqiAssessment = {
-      id: generateId('A'),
-      patientId,
-      assessmentDate: today,
-      ...scores,
-      totalScore,
-      ...formData
-    };
+        const totalScore = calculatePsqiTotal(scores);
+        const riskLevel = getRiskLevel(totalScore);
+        const today = getTodayString();
 
-    const newTask = createFollowupTask(patientId, '', riskLevel, today);
+        const newAssessment: PsqiAssessment = {
+          id: generateId('A'),
+          patientId,
+          assessmentDate: today,
+          sleepQuality: scores.sleepQuality as number,
+          sleepLatency: scores.sleepLatency as number,
+          sleepDuration: scores.sleepDuration as number,
+          sleepEfficiency: scores.sleepEfficiency as number,
+          sleepDisturbance: scores.sleepDisturbance as number,
+          hypnoticDrug: scores.hypnoticDrug as number,
+          daytimeDysfunction: scores.daytimeDysfunction as number,
+          totalScore,
+          ...formData
+        };
 
-    set((state) => {
-      const patient = state.patients.find((p) => p.id === patientId);
-      const updatedPatients = state.patients.map((p) =>
-        p.id === patientId
-          ? {
-              ...p,
-              latestPsqiScore: totalScore,
-              riskLevel,
-              latestAssessmentDate: today,
-              nextFollowupDate: newTask.scheduledDate
-            }
-          : p
-      );
+        const newTask = createFollowupTask(patientId, '', riskLevel, today);
 
-      newTask.patientName = patient?.name || '';
+        set((state) => {
+          const patient = state.patients.find((p) => p.id === patientId);
+          const updatedPatients = state.patients.map((p) =>
+            p.id === patientId
+              ? {
+                  ...p,
+                  latestPsqiScore: totalScore,
+                  riskLevel,
+                  latestAssessmentDate: today,
+                  nextFollowupDate: newTask.scheduledDate
+                }
+              : p
+          );
 
-      return {
-        assessments: [...state.assessments, newAssessment],
-        patients: updatedPatients,
-        tasks: [...state.tasks, newTask]
-      };
-    });
-  },
+          newTask.patientName = patient?.name || '';
 
-  updateTaskStatus: (taskId, status, notes) => {
-    set((state) => ({
-      tasks: state.tasks.map((task) =>
-        task.id === taskId
-          ? {
-              ...task,
-              status,
-              notes: notes || task.notes,
-              completedDate: status === 'completed' ? getTodayString() : task.completedDate
-            }
-          : task
-      )
-    }));
-  },
+          return {
+            assessments: [...state.assessments, newAssessment],
+            patients: updatedPatients,
+            tasks: [...state.tasks, newTask]
+          };
+        });
 
-  addContactRecord: (record) => {
-    const newRecord: ContactRecord = {
-      ...record,
-      id: generateId('C')
-    };
-    set((state) => ({
-      contactRecords: [...state.contactRecords, newRecord]
-    }));
-  },
+        return { success: true };
+      },
 
-  addIntervention: (intervention) => {
-    const newIntervention: Intervention = {
-      ...intervention,
-      id: generateId('I')
-    };
-    set((state) => ({
-      interventions: [...state.interventions, newIntervention]
-    }));
-  },
+      updateTaskStatus: (taskId, status, notes) => {
+        set((state) => ({
+          tasks: state.tasks.map((task) =>
+            task.id === taskId
+              ? {
+                  ...task,
+                  status,
+                  notes: notes || task.notes,
+                  completedDate: status === 'completed' ? getTodayString() : task.completedDate
+                }
+              : task
+          )
+        }));
+      },
 
-  getPatientById: (id) => get().patients.find((p) => p.id === id),
-  getAssessmentsByPatientId: (patientId) =>
-    get().assessments.filter((a) => a.patientId === patientId).sort((a, b) => b.assessmentDate.localeCompare(a.assessmentDate)),
-  getTasksByPatientId: (patientId) =>
-    get().tasks.filter((t) => t.patientId === patientId).sort((a, b) => b.scheduledDate.localeCompare(a.scheduledDate)),
-  getInterventionsByPatientId: (patientId) =>
-    get().interventions.filter((i) => i.patientId === patientId).sort((a, b) => b.date.localeCompare(a.date)),
-  getContactRecordsByPatientId: (patientId) =>
-    get().contactRecords.filter((c) => c.patientId === patientId).sort((a, b) => b.contactDate.localeCompare(a.contactDate)),
+      addContactRecord: (record) => {
+        const newRecord: ContactRecord = {
+          ...record,
+          id: generateId('C')
+        };
+        set((state) => ({
+          contactRecords: [...state.contactRecords, newRecord]
+        }));
+      },
 
-  getFilteredPatients: () => {
-    const { patients, searchQuery, filterRisk, filterStatus } = get();
-    return patients.filter((patient) => {
-      const matchSearch =
-        patient.name.includes(searchQuery) ||
-        patient.id.includes(searchQuery) ||
-        patient.phone.includes(searchQuery);
-      const matchRisk = filterRisk === 'all' || patient.riskLevel === filterRisk;
-      const matchStatus = filterStatus === 'all' || patient.status === filterStatus;
-      return matchSearch && matchRisk && matchStatus;
-    });
-  },
+      addIntervention: (intervention) => {
+        const newIntervention: Intervention = {
+          ...intervention,
+          id: generateId('I')
+        };
+        set((state) => ({
+          interventions: [...state.interventions, newIntervention]
+        }));
+      },
 
-  getPendingTasks: () => get().tasks.filter((t) => t.status === 'pending'),
-  getHighRiskPatients: () => get().patients.filter((p) => p.riskLevel === 'extreme' || p.riskLevel === 'high'),
-  getOverdueTasks: () => {
-    const today = getTodayString();
-    return get().tasks.filter((t) => t.status === 'pending' && t.scheduledDate < today);
-  },
-  getTodayTasks: () => {
-    const today = getTodayString();
-    return get().tasks.filter((t) => t.scheduledDate === today && t.status === 'pending');
-  }
-}));
+      getPatientById: (id) => get().patients.find((p) => p.id === id),
+      getAssessmentsByPatientId: (patientId) =>
+        get().assessments.filter((a) => a.patientId === patientId).sort((a, b) => b.assessmentDate.localeCompare(a.assessmentDate)),
+      getTasksByPatientId: (patientId) =>
+        get().tasks.filter((t) => t.patientId === patientId).sort((a, b) => b.scheduledDate.localeCompare(a.scheduledDate)),
+      getInterventionsByPatientId: (patientId) =>
+        get().interventions.filter((i) => i.patientId === patientId).sort((a, b) => b.date.localeCompare(a.date)),
+      getContactRecordsByPatientId: (patientId) =>
+        get().contactRecords.filter((c) => c.patientId === patientId).sort((a, b) => b.contactDate.localeCompare(a.contactDate)),
+
+      getFilteredPatients: () => {
+        const { patients, searchQuery, filterRisk, filterStatus } = get();
+        return patients.filter((patient) => {
+          const matchSearch =
+            patient.name.includes(searchQuery) ||
+            patient.id.includes(searchQuery) ||
+            patient.phone.includes(searchQuery);
+          const matchRisk = filterRisk === 'all' || patient.riskLevel === filterRisk;
+          const matchStatus = filterStatus === 'all' || patient.status === filterStatus;
+          return matchSearch && matchRisk && matchStatus;
+        });
+      },
+
+      getPendingTasks: () => get().tasks.filter((t) => t.status === 'pending'),
+      getHighRiskPatients: () => get().patients.filter((p) => p.riskLevel === 'extreme' || p.riskLevel === 'high'),
+      getOverdueTasks: () => {
+        const today = getTodayString();
+        return get().tasks.filter((t) => t.status === 'pending' && t.scheduledDate < today);
+      },
+      getTodayTasks: () => {
+        const today = getTodayString();
+        return get().tasks.filter((t) => t.scheduledDate === today && t.status === 'pending');
+      }
+    }),
+    {
+      name: 'sleep-clinic-storage',
+      partialize: (state) => ({
+        patients: state.patients,
+        assessments: state.assessments,
+        tasks: state.tasks,
+        interventions: state.interventions,
+        contactRecords: state.contactRecords
+      })
+    }
+  )
+);

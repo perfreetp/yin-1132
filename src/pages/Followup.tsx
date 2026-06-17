@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { Phone, MessageSquare, Calendar, Home, Check, X, Clock, AlertTriangle, User, FileText, Plus, ChevronRight, Save } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { useLocation, useSearchParams } from 'react-router-dom';
+import { Phone, MessageSquare, Calendar, Home, Check, X, Clock, AlertTriangle, User, FileText, Plus, ChevronRight, Save, ArrowLeft } from 'lucide-react';
 import { useAppStore } from '../store';
 import { RiskBadge } from '../components/RiskBadge';
 import { ScoreDisplay } from '../components/ScoreDisplay';
@@ -10,9 +11,50 @@ import type { FollowupTask, ContactRecord, Intervention } from '../types';
 type TabType = 'pending' | 'today' | 'overdue' | 'completed';
 
 export const Followup = () => {
-  const { tasks, getPatientById, getContactRecordsByPatientId, getInterventionsByPatientId, updateTaskStatus, addContactRecord, addIntervention, currentUser } = useAppStore();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const { tasks, getPatientById, getContactRecordsByPatientId, getInterventionsByPatientId, getTasksByPatientId, updateTaskStatus, addContactRecord, addIntervention, currentUser } = useAppStore();
   const [activeTab, setActiveTab] = useState<TabType>('today');
   const [selectedTask, setSelectedTask] = useState<FollowupTask | null>(null);
+  const [fromPatientList, setFromPatientList] = useState(false);
+
+  useEffect(() => {
+    const taskId = searchParams.get('taskId');
+    const patientId = searchParams.get('patientId');
+    
+    if (searchParams.get('patientId')) {
+      setFromPatientList(true);
+    }
+
+    if (taskId) {
+      const task = tasks.find(t => t.id === taskId);
+      if (task) {
+        setSelectedTask(task);
+        if (isOverdue(task.scheduledDate)) {
+          setActiveTab('overdue');
+        } else if (task.scheduledDate === getTodayString()) {
+          setActiveTab('today');
+        } else {
+          setActiveTab('pending');
+        }
+      }
+    } else if (patientId) {
+      const patientTasks = getTasksByPatientId(patientId);
+      const pendingTask = patientTasks.find(t => t.status === 'pending');
+      if (pendingTask) {
+        setSelectedTask(pendingTask);
+        if (isOverdue(pendingTask.scheduledDate)) {
+          setActiveTab('overdue');
+        } else if (pendingTask.scheduledDate === getTodayString()) {
+          setActiveTab('today');
+        } else {
+          setActiveTab('pending');
+        }
+      } else if (patientTasks.length > 0) {
+        setSelectedTask(patientTasks[0]);
+      }
+    }
+  }, [location.search, tasks, getTasksByPatientId]);
   const [showContactModal, setShowContactModal] = useState(false);
   const [showInterventionModal, setShowInterventionModal] = useState(false);
   const [contactForm, setContactForm] = useState({
@@ -174,9 +216,19 @@ export const Followup = () => {
     <div className="space-y-6">
       {/* 页面头部 */}
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-slate-800">随访计划</h1>
-          <p className="text-sm text-slate-500 mt-1">管理患者随访任务，记录触达结果</p>
+        <div className="flex items-center gap-4">
+          {fromPatientList && (
+            <button
+              onClick={() => window.history.back()}
+              className="p-2 hover:bg-white rounded-xl transition-colors"
+            >
+              <ArrowLeft className="w-5 h-5 text-slate-600" />
+            </button>
+          )}
+          <div>
+            <h1 className="text-xl font-semibold text-slate-800">随访计划</h1>
+            <p className="text-sm text-slate-500 mt-1">管理患者随访任务，记录触达结果</p>
+          </div>
         </div>
       </div>
 

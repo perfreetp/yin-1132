@@ -1,31 +1,36 @@
 import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, AlertCircle, TrendingDown, TrendingUp, Minus, Save, User, FileText } from 'lucide-react';
+import { ArrowLeft, AlertCircle, TrendingDown, TrendingUp, Minus, Save, User, FileText, Search, Plus, Stethoscope } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from 'recharts';
 import { useAppStore } from '../store';
 import { RiskBadge } from '../components/RiskBadge';
 import { ScoreDisplay } from '../components/ScoreDisplay';
-import { psqiQuestions, calculatePsqiTotal, getRiskLevel, getFollowupInterval } from '../utils/psqi';
+import { psqiQuestions, calculatePsqiTotal, getRiskLevel, getFollowupInterval, isPsqiComplete, getIncompleteItems } from '../utils/psqi';
 import type { PsqiScores } from '../types';
 import { formatDate, addDaysToDate, getTodayString } from '../utils/date';
+import { PatientModal } from '../components/PatientModal';
 
 export const Assessment = () => {
   const { patientId } = useParams<{ patientId: string }>();
   const navigate = useNavigate();
-  const { getPatientById, getAssessmentsByPatientId, addAssessment } = useAppStore();
+  const { getPatientById, getAssessmentsByPatientId, addAssessment, getFilteredPatients } = useAppStore();
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isNewPatientModalOpen, setIsNewPatientModalOpen] = useState(false);
+  const [showError, setShowError] = useState('');
 
   const patient = patientId ? getPatientById(patientId) : undefined;
   const assessments = patientId ? getAssessmentsByPatientId(patientId) : [];
   const lastAssessment = assessments[0];
 
   const [scores, setScores] = useState<PsqiScores>({
-    sleepQuality: 0,
-    sleepLatency: 0,
-    sleepDuration: 0,
-    sleepEfficiency: 0,
-    sleepDisturbance: 0,
-    hypnoticDrug: 0,
-    daytimeDysfunction: 0
+    sleepQuality: null,
+    sleepLatency: null,
+    sleepDuration: null,
+    sleepEfficiency: null,
+    sleepDisturbance: null,
+    hypnoticDrug: null,
+    daytimeDysfunction: null
   });
 
   const [formData, setFormData] = useState({
@@ -42,28 +47,36 @@ export const Assessment = () => {
   const riskLevel = useMemo(() => getRiskLevel(totalScore), [totalScore]);
   const followupDays = useMemo(() => getFollowupInterval(riskLevel), [riskLevel]);
   const suggestedFollowupDate = useMemo(() => addDaysToDate(getTodayString(), followupDays), [followupDays]);
+  const isComplete = useMemo(() => isPsqiComplete(scores), [scores]);
+  const incompleteItems = useMemo(() => getIncompleteItems(scores), [scores]);
 
   const scoreChange = lastAssessment ? totalScore - lastAssessment.totalScore : 0;
 
+  const allPatients = useMemo(() => {
+    const patients = getFilteredPatients();
+    if (!searchQuery.trim()) return patients;
+    return patients.filter(p => 
+      p.name.includes(searchQuery) || 
+      p.id.includes(searchQuery) || 
+      p.phone.includes(searchQuery)
+    );
+  }, [searchQuery, getFilteredPatients]);
+
   const handleScoreChange = (key: keyof PsqiScores, value: number) => {
     setScores((prev) => ({ ...prev, [key]: value }));
+    setShowError('');
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!patientId) return;
 
-    const hasAnyScore = Object.values(scores).some((s) => s > 0);
-    if (!hasAnyScore) {
-      alert('请至少完成一项PSQI评分');
-      return;
-    }
-    if (!formData.chiefComplaint) {
-      alert('请填写失眠主诉');
+    const result = addAssessment(patientId, scores, formData);
+    if (!result.success) {
+      setShowError(result.message || '保存失败');
       return;
     }
 
-    addAssessment(patientId, scores, formData);
     setShowSuccess(true);
     setTimeout(() => {
       setShowSuccess(false);
@@ -79,7 +92,7 @@ export const Assessment = () => {
 
   const radarData = psqiQuestions.map((q) => ({
     subject: q.label.replace(/^\d+\.\s*/, ''),
-    current: scores[q.key as keyof PsqiScores],
+    current: scores[q.key as keyof PsqiScores] ?? 0,
     previous: lastAssessment ? lastAssessment[q.key as keyof PsqiScores] : 0,
     fullMark: 3
   }));
@@ -91,30 +104,108 @@ export const Assessment = () => {
     previous: lastAssessment ? lastAssessment[q.key as keyof PsqiScores] : null
   }));
 
-  if (!patient) {
+  if (!patientId || !patient) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-center">
-          <AlertCircle className="w-16 h-16 text-slate-300 mx-auto mb-4" />
-          <p className="text-slate-500 mb-4">未找到患者信息</p>
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <h1 className="text-xl font-semibold text-slate-800">选择患者开始PSQI评估</h1>
+          </div>
           <button
-            onClick={() => navigate('/patients')}
-            className="px-4 py-2 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors"
+            onClick={() => setIsNewPatientModalOpen(true)}
+            className="flex items-center gap-2 px-5 py-2.5 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors font-medium shadow-lg shadow-blue-200"
           >
-            返回患者列表
+            <Plus className="w-5 h-5" />
+            <span>新建患者</span>
           </button>
         </div>
+
+        <div className="bg-gradient-to-br from-blue-50 to-indigo-50 rounded-2xl p-6 border border-blue-100">
+          <div className="flex items-start gap-4">
+            <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center flex-shrink-0">
+              <Stethoscope className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800 mb-2">PSQI量表评估</h2>
+              <p className="text-slate-600 text-sm leading-relaxed">
+                请先从下方列表选择一位患者，或点击右上角"新建患者"按钮创建新档案。
+                <br />
+                评估包含7个分项，全部完成后才能保存，系统将自动计算总分和风险等级。
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="max-w-2xl">
+          <div className="relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+            <input
+              type="text"
+              placeholder="搜索患者姓名、ID、电话..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-12 pr-4 py-4 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all shadow-sm text-base"
+            />
+          </div>
+        </div>
+
+        <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+          <div className="divide-y divide-slate-50">
+            {allPatients.map((p) => (
+              <div
+                key={p.id}
+                className="flex items-center justify-between p-4 hover:bg-slate-50 transition-colors cursor-pointer group"
+                onClick={() => navigate(`/assessment/${p.id}`)}
+              >
+                <div className="flex items-center gap-4">
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center font-semibold text-white ${
+                    p.gender === 'male' ? 'bg-gradient-to-br from-blue-400 to-blue-500' : 'bg-gradient-to-br from-pink-400 to-rose-500'
+                  }`}>
+                    {p.name.charAt(0)}
+                  </div>
+                  <div>
+                    <div className="font-medium text-slate-800 flex items-center gap-2">
+                      {p.name}
+                      <RiskBadge level={p.riskLevel} size="sm" />
+                    </div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      {p.id} · {p.gender === 'male' ? '男' : '女'} · {p.age}岁 · {p.phone}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4">
+                  {p.latestPsqiScore > 0 && (
+                    <div className="text-right">
+                      <div className="text-xs text-slate-400">最近PSQI</div>
+                      <ScoreDisplay score={p.latestPsqiScore} size="sm" showLabel={false} />
+                    </div>
+                  )}
+                  <div className="p-2 text-blue-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <ArrowLeft className="w-5 h-5 rotate-180" />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          {allPatients.length === 0 && (
+            <div className="py-16 text-center">
+              <Search className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+              <p className="text-slate-500">未找到匹配的患者</p>
+            </div>
+          )}
+        </div>
+
+        <PatientModal isOpen={isNewPatientModalOpen} onClose={() => setIsNewPatientModalOpen(false)} />
       </div>
     );
   }
 
   return (
     <div className="space-y-6">
-      {/* 页面头部 */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-4">
           <button
-            onClick={() => navigate('/patients')}
+            onClick={() => navigate('/assessment')}
             className="p-2 hover:bg-white rounded-xl transition-colors"
           >
             <ArrowLeft className="w-5 h-5 text-slate-600" />
@@ -165,12 +256,40 @@ export const Assessment = () => {
         </div>
       </div>
 
+      {showError && (
+        <div className="bg-red-50 border border-red-200 rounded-xl p-4 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-red-700 font-medium">{showError}</p>
+            {incompleteItems.length > 0 && (
+              <p className="text-red-600 text-sm mt-1">
+                未完成的分项：{incompleteItems.join('、')}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {!isComplete && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-start gap-3">
+          <AlertCircle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+          <div>
+            <p className="text-amber-700 font-medium">
+              还有 {incompleteItems.length} 个分项未完成
+            </p>
+            <p className="text-amber-600 text-sm mt-1">
+              请完成：{incompleteItems.join('、')}
+            </p>
+          </div>
+          <div className="ml-auto text-sm text-amber-600 font-medium">
+            {7 - incompleteItems.length} / 7
+          </div>
+        </div>
+      )}
+
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* 主要内容区 */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* 左侧：PSQI量表录入 */}
           <div className="lg:col-span-2 space-y-6">
-            {/* PSQI 7个分项 */}
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
               <h2 className="text-lg font-semibold text-slate-800 mb-6 flex items-center gap-2">
                 <FileText className="w-5 h-5 text-blue-500" />
@@ -178,69 +297,82 @@ export const Assessment = () => {
               </h2>
 
               <div className="space-y-8">
-                {psqiQuestions.map((question, qIndex) => (
-                  <div key={question.key} className="group">
-                    <div className="flex items-start gap-4 mb-4">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-500 flex items-center justify-center text-white font-semibold text-sm flex-shrink-0 shadow-lg shadow-blue-100">
-                        {qIndex + 1}
-                      </div>
-                      <div className="flex-1">
-                        <h3 className="font-medium text-slate-800 mb-1">{question.label}</h3>
-                        <p className="text-sm text-slate-500">{question.description}</p>
-                      </div>
-                      <div className="text-right">
-                        <span className={`text-2xl font-bold font-mono ${
-                          scores[question.key as keyof PsqiScores] >= 2 ? 'text-red-500' :
-                          scores[question.key as keyof PsqiScores] >= 1 ? 'text-orange-500' : 'text-green-500'
+                {psqiQuestions.map((question, qIndex) => {
+                  const currentScore = scores[question.key as keyof PsqiScores];
+                  const isAnswered = currentScore !== null;
+                  return (
+                    <div key={question.key} className={`group ${!isAnswered ? 'opacity-90' : ''}`}>
+                      <div className="flex items-start gap-4 mb-4">
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-semibold text-sm flex-shrink-0 shadow-lg ${
+                          isAnswered
+                            ? 'bg-gradient-to-br from-blue-500 to-indigo-500 shadow-blue-100'
+                            : 'bg-gradient-to-br from-slate-300 to-slate-400 shadow-slate-100'
                         }`}>
-                          {scores[question.key as keyof PsqiScores]}
-                        </span>
-                        <span className="text-sm text-slate-400">/3</span>
+                          {qIndex + 1}
+                        </div>
+                        <div className="flex-1">
+                          <h3 className={`font-medium mb-1 ${
+                            isAnswered ? 'text-slate-800' : 'text-slate-600'
+                          }`}>
+                            {question.label}
+                            {!isAnswered && <span className="text-amber-500 ml-2 text-sm">*未完成</span>}
+                          </h3>
+                          <p className="text-sm text-slate-500">{question.description}</p>
+                        </div>
+                        <div className="text-right">
+                          <span className={`text-2xl font-bold font-mono ${
+                            currentScore === null ? 'text-slate-300' :
+                            currentScore >= 2 ? 'text-red-500' :
+                            currentScore >= 1 ? 'text-orange-500' : 'text-green-500'
+                          }`}>
+                            {currentScore !== null ? currentScore : '-'}
+                          </span>
+                          <span className="text-sm text-slate-400">/3</span>
+                        </div>
                       </div>
-                    </div>
 
-                    <div className="ml-12 grid grid-cols-4 gap-3">
-                      {question.options.map((option) => (
-                        <button
-                          key={option.value}
-                          type="button"
-                          onClick={() => handleScoreChange(question.key as keyof PsqiScores, option.value)}
-                          className={`relative p-4 rounded-xl border-2 transition-all duration-200 text-left ${
-                            scores[question.key as keyof PsqiScores] === option.value
-                              ? 'border-blue-500 bg-blue-50 shadow-md shadow-blue-100'
-                              : 'border-slate-100 hover:border-blue-200 hover:bg-slate-50'
-                          }`}
-                        >
-                          <div className="flex items-start gap-3">
-                            <div className={`w-5 h-5 rounded-full border-2 flex-shrink-0 mt-0.5 flex items-center justify-center ${
-                              scores[question.key as keyof PsqiScores] === option.value
-                                ? 'border-blue-500 bg-blue-500'
-                                : 'border-slate-300'
-                            }`}>
-                              {scores[question.key as keyof PsqiScores] === option.value && (
-                                <div className="w-2 h-2 rounded-full bg-white" />
-                              )}
-                            </div>
-                            <div>
-                              <div className="text-xs font-medium text-slate-400 mb-1">{option.value}分</div>
-                              <div className={`text-sm ${
-                                scores[question.key as keyof PsqiScores] === option.value
-                                  ? 'text-blue-700 font-medium'
-                                  : 'text-slate-700'
+                      <div className="ml-12 grid grid-cols-4 gap-3">
+                        {question.options.map((option) => (
+                          <button
+                            key={option.value}
+                            type="button"
+                            onClick={() => handleScoreChange(question.key as keyof PsqiScores, option.value)}
+                            className={`relative p-4 rounded-xl border-2 transition-all duration-200 text-left ${
+                              currentScore === option.value
+                                ? 'border-blue-500 bg-blue-50 shadow-md shadow-blue-100'
+                                : 'border-slate-100 hover:border-blue-200 hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className="flex items-start gap-3">
+                              <div className={`w-5 h-5 rounded-full border-2 flex-shrink-0 mt-0.5 flex items-center justify-center ${
+                                currentScore === option.value
+                                  ? 'border-blue-500 bg-blue-500'
+                                  : 'border-slate-300'
                               }`}>
-                                {option.label}
+                                {currentScore === option.value && (
+                                  <div className="w-2 h-2 rounded-full bg-white" />
+                                )}
+                              </div>
+                              <div>
+                                <div className="text-xs font-medium text-slate-400 mb-1">{option.value}分</div>
+                                <div className={`text-sm ${
+                                  currentScore === option.value
+                                    ? 'text-blue-700 font-medium'
+                                    : 'text-slate-700'
+                                }`}>
+                                  {option.label}
+                                </div>
                               </div>
                             </div>
-                          </div>
-                        </button>
-                      ))}
+                          </button>
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
-            {/* 主诉与症状 */}
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6">
               <h2 className="text-lg font-semibold text-slate-800 mb-6">临床信息</h2>
 
@@ -251,7 +383,10 @@ export const Assessment = () => {
                   </label>
                   <textarea
                     value={formData.chiefComplaint}
-                    onChange={(e) => setFormData({ ...formData, chiefComplaint: e.target.value })}
+                    onChange={(e) => {
+                      setFormData({ ...formData, chiefComplaint: e.target.value });
+                      setShowError('');
+                    }}
                     className="w-full px-4 py-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none"
                     rows={2}
                     placeholder="请描述患者的主要失眠症状及持续时间..."
@@ -314,9 +449,7 @@ export const Assessment = () => {
             </div>
           </div>
 
-          {/* 右侧：总分面板、对比、图表 */}
           <div className="space-y-6">
-            {/* 总分与风险面板 */}
             <div className={`bg-gradient-to-br ${
               riskLevel === 'extreme' ? 'from-red-500 to-red-600' :
               riskLevel === 'high' ? 'from-orange-500 to-orange-600' :
@@ -325,7 +458,9 @@ export const Assessment = () => {
             } rounded-2xl p-6 text-white shadow-xl`}>
               <div className="text-center">
                 <div className="text-sm opacity-90 mb-2">PSQI 总分</div>
-                <div className="text-6xl font-bold font-mono mb-2">{totalScore}</div>
+                <div className="text-6xl font-bold font-mono mb-2">
+                  {isComplete ? totalScore : '-'}
+                </div>
                 <div className="text-sm opacity-75">/ 21</div>
                 <div className="mt-4 pt-4 border-t border-white/20">
                   <div className="text-sm opacity-90 mb-1">风险等级</div>
@@ -338,7 +473,6 @@ export const Assessment = () => {
               </div>
             </div>
 
-            {/* 复诊建议 */}
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
               <h3 className="font-semibold text-slate-800 mb-3">复诊建议</h3>
               <div className="space-y-3">
@@ -357,7 +491,6 @@ export const Assessment = () => {
               </div>
             </div>
 
-            {/* 分项得分对比 */}
             <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
               <h3 className="font-semibold text-slate-800 mb-4">分项得分</h3>
               <div className="space-y-3">
@@ -369,18 +502,20 @@ export const Assessment = () => {
                     <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-all ${
+                          item.current === null ? 'bg-slate-200' :
                           item.current >= 2 ? 'bg-red-500' :
                           item.current >= 1 ? 'bg-orange-500' : 'bg-green-500'
                         }`}
-                        style={{ width: `${(item.current / 3) * 100}%` }}
+                        style={{ width: `${((item.current ?? 0) / 3) * 100}%` }}
                       />
                     </div>
                     <div className="w-12 text-right">
                       <span className={`text-sm font-bold font-mono ${
+                        item.current === null ? 'text-slate-300' :
                         item.current >= 2 ? 'text-red-600' :
                         item.current >= 1 ? 'text-orange-600' : 'text-green-600'
                       }`}>
-                        {item.current}
+                        {item.current !== null ? item.current : '-'}
                       </span>
                       {item.previous !== null && item.previous !== undefined && (
                         <span className="text-xs text-slate-400">/{item.previous}</span>
@@ -391,7 +526,6 @@ export const Assessment = () => {
               </div>
             </div>
 
-            {/* 雷达图 */}
             {lastAssessment && (
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
                 <h3 className="font-semibold text-slate-800 mb-4">分项对比</h3>
@@ -435,7 +569,6 @@ export const Assessment = () => {
               </div>
             )}
 
-            {/* 趋势图 */}
             {trendChartData.length > 1 && (
               <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-5">
                 <h3 className="font-semibold text-slate-800 mb-4">评分趋势</h3>
@@ -464,25 +597,34 @@ export const Assessment = () => {
           </div>
         </div>
 
-        {/* 底部操作栏 */}
         <div className="sticky bottom-0 bg-white/95 backdrop-blur-sm border-t border-slate-200 rounded-2xl p-4 shadow-lg -mx-2">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <div className="text-sm text-slate-500">
                 评估日期：<span className="font-medium text-slate-700">{formatDate(getTodayString())}</span>
               </div>
+              {!isComplete && (
+                <div className="text-sm text-amber-600 font-medium">
+                  已完成 {7 - incompleteItems.length}/7 项
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-3">
               <button
                 type="button"
-                onClick={() => navigate('/patients')}
+                onClick={() => navigate('/assessment')}
                 className="px-6 py-2.5 border border-slate-200 text-slate-600 rounded-xl hover:bg-slate-50 transition-colors font-medium"
               >
                 取消
               </button>
               <button
                 type="submit"
-                className="px-8 py-2.5 bg-blue-500 text-white rounded-xl hover:bg-blue-600 transition-colors font-medium shadow-lg shadow-blue-200 flex items-center gap-2"
+                disabled={!isComplete}
+                className={`px-8 py-2.5 rounded-xl transition-colors font-medium shadow-lg flex items-center gap-2 ${
+                  isComplete
+                    ? 'bg-blue-500 text-white hover:bg-blue-600 shadow-blue-200'
+                    : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                }`}
               >
                 <Save className="w-5 h-5" />
                 保存评估
@@ -492,7 +634,6 @@ export const Assessment = () => {
         </div>
       </form>
 
-      {/* 成功提示 */}
       {showSuccess && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="bg-white rounded-2xl shadow-2xl p-8 text-center animate-in zoom-in">
@@ -506,6 +647,8 @@ export const Assessment = () => {
           </div>
         </div>
       )}
+
+      <PatientModal isOpen={isNewPatientModalOpen} onClose={() => setIsNewPatientModalOpen(false)} />
     </div>
   );
 };

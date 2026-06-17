@@ -14,6 +14,7 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route element={<Layout />}>
           <Route path="/patients" element={<PatientList />} />
+          <Route path="/assessment" element={<Assessment />} />
           <Route path="/assessment/:patientId" element={<Assessment />} />
           <Route path="/followup" element={<Followup />} />
           <Route path="/alert" element={<Alert />} />
